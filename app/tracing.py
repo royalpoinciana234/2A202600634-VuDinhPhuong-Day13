@@ -6,6 +6,7 @@ from typing import Any
 try:
     from langfuse.decorators import observe, langfuse_context
 except Exception:  # pragma: no cover
+    print("test")
     def observe(*args: Any, **kwargs: Any):
         def decorator(func):
             return func

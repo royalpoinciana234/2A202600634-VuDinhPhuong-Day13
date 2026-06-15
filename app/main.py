@@ -1,9 +1,19 @@
 from __future__ import annotations
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
+# Map LANGFUSE_BASE_URL to LANGFUSE_HOST if needed, and strip surrounding quotes
+if "LANGFUSE_BASE_URL" in os.environ and "LANGFUSE_HOST" not in os.environ:
+    os.environ["LANGFUSE_HOST"] = os.environ["LANGFUSE_BASE_URL"]
+
+for key in ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST", "LANGFUSE_BASE_URL"]:
+    if key in os.environ:
+        os.environ[key] = os.environ[key].strip('"' + "'")
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from structlog.contextvars import bind_contextvars
 
 from .agent import LabAgent
@@ -32,6 +42,19 @@ async def startup() -> None:
     )
 
 
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/dashboard")
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
+    with open(dashboard_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+    return HTMLResponse(content=html_content)
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"ok": True, "tracing_enabled": tracing_enabled(), "incidents": status()}
@@ -45,8 +68,14 @@ async def metrics() -> dict:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     # TODO: Enrich logs with request context (user_id_hash, session_id, feature, model, env)
-    # bind_contextvars(...)
-    
+    bind_contextvars(
+        user_id_hash=hash_user_id(body.user_id),
+        session_id=body.session_id,
+        feature=body.feature,
+        model=os.getenv("MODEL_NAME", "default"),
+        env=os.getenv("APP_ENV", "dev"),
+    )
+
     log.info(
         "request_received",
         service="api",
@@ -66,6 +95,7 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
             tokens_in=result.tokens_in,
             tokens_out=result.tokens_out,
             cost_usd=result.cost_usd,
+            quality_score=result.quality_score,
             payload={"answer_preview": summarize_text(result.answer)},
         )
         return ChatResponse(
